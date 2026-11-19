@@ -1,0 +1,22 @@
+# AegisProxy formatting: Google style, 100 columns, 2-space indent.
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 100
+IndentWidth: 2
+AccessModifierOffset: -1
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"aegisproxy/'
+    Priority: 1
+  - Regex: '^<gtest/'
+    Priority: 3
+  - Regex: '^<.*\.h>'
+    Priority: 4
+  - Regex: '^<.*'
+    Priority: 2
+SortIncludes: CaseSensitive

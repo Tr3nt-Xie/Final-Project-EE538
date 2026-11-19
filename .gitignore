@@ -66,3 +66,18 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# --- AegisProxy additions ---
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Coverage / profiling
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Local config overrides (keep the example in git)
+/config/*.local.conf

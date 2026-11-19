@@ -1,0 +1,29 @@
+# Replace the placeholder handles with the three GitHub usernames.
+# Pull requests touching these paths request review from the owner automatically.
+
+# Member 1 — Core Networking & Architecture (Technical Lead)
+/include/aegisproxy/network/   @member1
+/src/network/                  @member1
+/tests/integration/            @member1
+/CMakeLists.txt                @member1
+/cmake/                        @member1
+/.github/                      @member1
+
+# Member 2 — HTTP Protocol & Proxy
+/include/aegisproxy/http/      @member2
+/include/aegisproxy/proxy/     @member2
+/src/http/                     @member2
+/src/proxy/                    @member2
+
+# Member 3 — Load Balancing & Reliability
+/include/aegisproxy/balancer/        @member3
+/include/aegisproxy/datastructures/  @member3
+/include/aegisproxy/health/          @member3
+/src/balancer/                       @member3
+/src/datastructures/                 @member3
+/src/health/                         @member3
+
+# Shared: any member may edit, Technical Lead reviews
+/include/aegisproxy/common/    @member1
+/src/common/                   @member1
+/docs/                         @member1

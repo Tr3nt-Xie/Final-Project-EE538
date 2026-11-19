@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.compiler.name }} / ${{ matrix.build_type }}${{ matrix.sanitize == 'ON' && ' + ASan/UBSan' || '' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - { name: gcc-13,   cc: gcc-13,   cxx: g++-13 }
+          - { name: clang-18, cc: clang-18, cxx: clang++-18 }
+        build_type: [Debug, Release]
+        sanitize: ['OFF']
+        include:
+          - compiler: { name: gcc-13, cc: gcc-13, cxx: g++-13 }
+            build_type: Debug
+            sanitize: 'ON'
+    env:
+      CC: ${{ matrix.compiler.cc }}
+      CXX: ${{ matrix.compiler.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build ${{ matrix.compiler.cc }} \
+            $([ "${{ matrix.compiler.name }}" = gcc-13 ] && echo g++-13 || echo "") \
+            libgtest-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DAEGIS_WARNINGS_AS_ERRORS=ON \
+            -DAEGIS_ENABLE_ASAN=${{ matrix.sanitize }} \
+            -DAEGIS_ENABLE_UBSAN=${{ matrix.sanitize }}
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke-run executable (config check)
+        run: ./build/aegisproxy --config config/aegisproxy.example.conf --check-config
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - name: Check formatting
+        run: |
+          git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 --dry-run --Werror
