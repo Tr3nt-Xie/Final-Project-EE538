@@ -73,6 +73,11 @@ target_link_libraries(aegisproxy PRIVATE
   aegis_options aegis_common aegis_network aegis_http aegis_proxy aegis_balancer aegis_health)
 
 # ---------------------------------------------------------------------------
+# Examples (Member 2's blocking baseline; the Python backend needs no build)
+# ---------------------------------------------------------------------------
+add_subdirectory(examples/blocking_proxy)
+
+# ---------------------------------------------------------------------------
 # Tests / benchmarks
 # ---------------------------------------------------------------------------
 if(AEGIS_BUILD_TESTS)

@@ -35,6 +35,8 @@ enum class ConnectionState : std::uint8_t {
 class ConnectionStateMachine {
  public:
   ConnectionStateMachine() = default;
+  /// Backend-role connections start in ConnectingBackend (see Connection::role()).
+  explicit ConnectionStateMachine(ConnectionState initial) noexcept : state_(initial) {}
 
   [[nodiscard]] ConnectionState state() const noexcept { return state_; }
   [[nodiscard]] bool is_terminal() const noexcept { return state_ == ConnectionState::Closed; }

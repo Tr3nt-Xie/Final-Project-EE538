@@ -41,7 +41,8 @@ the full Linux build use Docker: `scripts/docker-dev.sh [debug|asan|release]`.
 | `include/aegisproxy/datastructures` | Member 3 | `IndexedMinHeap<K,P>`, `HashTable<K,V>` (header-only templates) |
 | `include/aegisproxy/balancer`, `src/balancer` | Member 3 | `BackendRegistry`, `LoadBalancingStrategy`, `RoundRobin`/`LeastConnections`/`Adaptive` balancers |
 | `include/aegisproxy/health`, `src/health` | Member 3 | `HealthMonitor` |
-| `tests/unit`, `tests/integration` | each owner | GoogleTest; `DISABLED_` tests document pending behaviour |
+| `tests/unit/<module>`, `tests/integration/{network,proxy,failover}` | each owner | GoogleTest, one dir per member; `ctest -L member2`; `DISABLED_` tests document pending behaviour |
+| `examples/blocking_proxy` | Member 2 | blocking-I/O baseline skeleton for benchmarks |
 | `docs/` | all | architecture, interfaces, ownership, development, milestones |
 | `examples/backend_server` | — | Python test backend |
 | `benchmarks/` | — | micro-benchmark harness (no results yet) |
@@ -49,6 +50,8 @@ the full Linux build use Docker: `scripts/docker-dev.sh [debug|asan|release]`.
 
 ## Documentation
 
+* [docs/team_development_guide.md](docs/team_development_guide.md) — **start here**: owned files, classes to implement, dependencies, acceptance criteria, per-member commands
+* [docs/team_responsibilities.md](docs/team_responsibilities.md) — who does what, priorities P1–P3
 * [docs/architecture.md](docs/architecture.md) — pipeline, module boundaries, request lifecycle
 * [docs/interfaces.md](docs/interfaces.md) — public interfaces and cross-module contracts
 * [docs/ownership.md](docs/ownership.md) — who owns which resource; stale events and fd reuse
@@ -65,7 +68,9 @@ deferred tasks, wake-up), `ConnectionStateMachine`, `Connection` I/O, `Connectio
 response serialisation, `BackendRegistry` (health/load fan-out), strategy factory,
 `HealthMonitor` lifecycle, application startup/shutdown via `signalfd`, CI.
 
-Not implemented (explicit `NotImplemented` errors, `DISABLED_` tests): `HttpParser::feed`,
-request forwarding, `IndexedMinHeap`/`HashTable` algorithms, all three `select()`
-methods, health probing and state transitions, failover, backpressure decisions, EventLoop
-timers, hostname resolution, edge-triggered epoll, benchmarks.
+Not implemented (explicit `NotImplemented` errors, `DISABLED_` tests, `TODO(Member N)`
+markers — `scripts/todos.sh`): `ConnectionManager::adopt_backend/pause_reads/resume_reads`,
+backpressure decisions, EventLoop timers (M1); `HttpParser::feed`, request forwarding,
+blocking baseline (M2); `IndexedMinHeap`/`HashTable` algorithms, all three `select()`
+methods, health probing and transitions, failover (M3); hostname resolution,
+edge-triggered epoll, benchmark numbers.

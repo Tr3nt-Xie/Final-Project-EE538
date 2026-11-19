@@ -9,11 +9,12 @@ Result<std::string> RequestForwarder::serialize_for_backend(
   return Error::not_implemented("RequestForwarder::serialize_for_backend");
 }
 
-Status RequestForwarder::forward(net::Connection& client, const http::HttpRequest& request,
-                                 Fd backend_fd) {
+Status RequestForwarder::forward(net::ConnectionManager& connections, ConnectionId client,
+                                 const http::HttpRequest& request, ConnectionId backend) {
+  (void)connections;
   (void)client;
   (void)request;
-  (void)backend_fd;
+  (void)backend;
   return Error::not_implemented("RequestForwarder::forward");
 }
 

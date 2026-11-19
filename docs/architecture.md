@@ -50,8 +50,9 @@ network ◀── proxy ──▶ http ───────┘
 
 * `common` depends on nothing. `datastructures` is header-only and depends on `common`.
 * `network` depends only on `common`. It never includes `http`, `proxy`, `balancer` or
-  `health`. Upper layers reach it through callbacks (`ConnectionManager::set_data_handler`)
-  and the polymorphic `ConnectionContext` slot on `Connection`.
+  `health`. Upper layers reach it through the `ConnectionManager` handlers (data /
+  writable / close) and the polymorphic `ConnectionContext` slot on `Connection`; they
+  never call `EventLoop` for sockets.
 * `http` depends only on `common` (pure protocol code, no sockets).
 * `balancer` depends on `common` + `datastructures`; `health` depends on `balancer`.
   Neither touches sockets: all load/health information flows through `BackendRegistry`.
@@ -75,9 +76,11 @@ so reviewers check this (CONTRIBUTING.md checklist).
 3. **Select.** When a request is complete: `SelectingBackend`;
    `LoadBalancingStrategy::select()` returns a `BackendId` or `NoHealthyBackend` (→ 503).
 4. **Connect.** `ConnectingBackend`; `BackendConnector::begin_connect()` returns a
-   non-blocking socket (`InProgress`); the ProxySession registers it with the loop for
-   Writable; on readiness `finish_connect()` checks `SO_ERROR`. Failure → failover to
-   another backend, or 502 after N attempts. `BackendRegistry::on_connection_started`.
+   non-blocking socket (`InProgress`); the proxy hands it to
+   `ConnectionManager::adopt_backend(socket, client_id)`, which supervises the connect and
+   reports completion through the writable handler (or failure through the close handler
+   with `last_error()`). Failure → failover to another backend, or 502 after N attempts.
+   `BackendRegistry::on_connection_started`.
 5. **Forward.** `ForwardingRequest`; `RequestForwarder` serialises the request
    (hop-by-hop headers stripped, `X-Forwarded-For` added) into a backend-side buffer and
    streams the request body.

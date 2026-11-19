@@ -61,10 +61,13 @@ error, 2 startup failure, 3 event-loop failure.
 
 ## Tests
 
-* Unit tests live in `tests/unit/<module>_test.cpp`; each test binary links only the
-  module under test (plus its dependencies). `tests/unit/fake_poller.hpp` drives
-  `EventLoop` deterministically without epoll.
-* Integration tests (`tests/integration/`) use a real epoll loop on `127.0.0.1:0`.
+* Unit tests live in `tests/unit/<module>/`, one directory (and `CMakeLists.txt`) per
+  module so that members never edit the same file. Each test binary links only the module
+  under test. `tests/unit/network/fake_poller.hpp` drives `EventLoop` without epoll.
+* Integration tests live in `tests/integration/{network,proxy,failover}/` (Members 1/2/3)
+  and use a real epoll loop on `127.0.0.1:0`; `tests/integration/proxy_test_support.hpp`
+  has the shared fixture and an in-process `StubBackend`.
+* Every test carries a CTest label: `ctest -L member1|member2|member3|shared`.
 * Tests for unimplemented behaviour are `DISABLED_`-prefixed and show up as "Disabled" in
   `ctest`; **remove the prefix in the PR that implements the feature.** Run a disabled test
   on purpose with `./build/tests/test_indexed_min_heap --gtest_also_run_disabled_tests`.

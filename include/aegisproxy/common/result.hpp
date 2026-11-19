@@ -130,6 +130,7 @@ class [[nodiscard]] Result {
   [[nodiscard]] const T* operator->() const { return &value(); }
   [[nodiscard]] T& operator*() & { return value(); }
   [[nodiscard]] const T& operator*() const& { return value(); }
+  [[nodiscard]] T&& operator*() && { return std::move(*this).value(); }
 
   template <typename U>
   [[nodiscard]] T value_or(U&& fallback) const& {

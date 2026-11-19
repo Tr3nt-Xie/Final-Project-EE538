@@ -18,8 +18,13 @@ constexpr std::string_view kLog = "http_proxy";
 class ProxySession final : public net::ConnectionContext {
  public:
   http::HttpParser parser;
-  // TODO(Member 2): net::SocketHandle backend; HandlerId backend_handler; BackendId
-  // backend_id; std::chrono::steady_clock::time_point started_at; for forwarding.
+  // TODO(Member 2): forwarding state —
+  //   ConnectionId backend_conn{kInvalidConnectionId};   // from ConnectionManager::adopt_backend
+  //   BackendId backend_id{kInvalidBackendId};
+  //   std::chrono::steady_clock::time_point started_at;  // for CompletionInfo::latency
+  //   unsigned connect_attempts{0};                       // failover budget
+  // Backend sockets are owned by ConnectionManager (adopt_backend), never by this
+  // session, and the session never calls EventLoop::add/modify/remove directly.
 };
 
 ProxySession& session_for(net::Connection& connection) {
@@ -39,7 +44,14 @@ HttpProxy::HttpProxy(net::ConnectionManager& connections, lb::BackendRegistry& r
     : connections_(connections), registry_(registry), strategy_(strategy), connector_(connector) {}
 
 void HttpProxy::attach() {
-  connections_.set_data_handler([this](net::Connection& c) { on_client_data(c); });
+  connections_.set_data_handler([this](net::Connection& c) {
+    if (c.role() == net::ConnectionRole::Client) {
+      on_client_data(c);
+    }
+    // TODO(Member 2): else on_backend_data(c) — relay response bytes to the peer client.
+  });
+  // TODO(Member 2): set_writable_handler (backend connected / client drained) and
+  // set_close_handler (report CompletionInfo to registry_, close the peer, or fail over).
 }
 
 void HttpProxy::on_client_data(net::Connection& connection) {
@@ -63,10 +75,14 @@ void HttpProxy::on_client_data(net::Connection& connection) {
 
   // TODO(Member 2): the real pipeline —
   //   auto request = session.parser.take_request();
-  //   auto backend = strategy_.select({...});            // NoHealthyBackend → 503
-  //   auto pending = connector_.begin_connect(endpoint);  // failure → failover/502
+  //   auto backend = strategy_.select({...});                 // NoHealthyBackend → 503
+  //   auto pending = connector_.begin_connect(endpoint);       // SystemError → next backend / 502
+  //   auto bid = connections_.adopt_backend(std::move(pending->socket), connection.id());
   //   registry_.on_connection_started(backend);
-  //   forwarder_.forward(connection, request, pending.socket.get());
+  //   forwarder_.forward(connection, request, *bid);           // writes into backend outbound()
+  // Then, from the writable/data/close handlers (set in attach()):
+  //   backend connected → request_write(backend); backend data → append to client
+  //   outbound() + request_write(client); backend closed → on_connection_finished(...)
   (void)registry_;
   (void)strategy_;
   (void)connector_;

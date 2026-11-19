@@ -13,11 +13,14 @@
 
 namespace aegis::net {
 
-Connection::Connection(ConnectionId id, SocketHandle socket, std::size_t buffer_limit_bytes)
+Connection::Connection(ConnectionId id, ConnectionRole role, SocketHandle socket,
+                       std::size_t buffer_limit_bytes, ConnectionState initial_state)
     : id_(id),
+      role_(role),
       socket_(std::move(socket)),
       inbound_(Buffer::kDefaultInitialCapacity, buffer_limit_bytes),
-      outbound_(Buffer::kDefaultInitialCapacity, buffer_limit_bytes) {}
+      outbound_(Buffer::kDefaultInitialCapacity, buffer_limit_bytes),
+      state_machine_(initial_state) {}
 
 Result<std::size_t> Connection::read_available() {
   std::size_t total = 0;
@@ -32,6 +35,7 @@ Result<std::size_t> Connection::read_available() {
     if (n > 0) {
       inbound_.commit(static_cast<std::size_t>(n));
       total += static_cast<std::size_t>(n);
+      bytes_read_ += static_cast<std::uint64_t>(n);
       if (static_cast<std::size_t>(n) < region->size())
         break;  // drained
       continue;
@@ -58,6 +62,7 @@ Result<std::size_t> Connection::flush() {
     if (n > 0) {
       outbound_.consume(static_cast<std::size_t>(n));
       total += static_cast<std::size_t>(n);
+      bytes_written_ += static_cast<std::uint64_t>(n);
       continue;
     }
     if (n < 0 && socket_ops::is_would_block(errno))

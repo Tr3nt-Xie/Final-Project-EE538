@@ -65,6 +65,7 @@ void ConnectionManager::on_listener_ready(EventMask events) {
       return;  // EAGAIN
     auto id = adopt(std::move(**accepted));
     if (!id) {
+      ++stats_.total_rejected;
       log::warn(kLog, "dropping connection: " + id.error().to_string());
     }
   }
@@ -78,21 +79,35 @@ Result<ConnectionId> ConnectionManager::adopt(SocketHandle socket) {
                  "connection limit " + std::to_string(limits_.max_connections) + " reached"};
   }
   const ConnectionId id = next_id_++;
-  auto conn = std::make_unique<Connection>(id, std::move(socket), limits_.buffer_limit_bytes);
+  auto conn =
+      std::make_unique<Connection>(id, ConnectionRole::Client, std::move(socket),
+                                   limits_.buffer_limit_bytes, ConnectionState::ReadingRequest);
   auto handler = loop_.add(conn->fd(), EventMask::Readable,
                            [this, id](EventMask events) { on_connection_ready(id, events); });
   if (!handler)
     return handler.error();
   conn->set_handler_id(*handler);
-  if (Status st = conn->state_machine().transition_to(ConnectionState::ReadingRequest); !st) {
-    (void)loop_.remove(*handler);
-    return st.error();
-  }
+  conn->set_interest(EventMask::Readable);
   connections_.emplace(id, std::move(conn));
-  ++total_accepted_;
+  ++stats_.total_accepted;
   log::debug(kLog, "connection " + std::to_string(id) + " accepted (" +
                        std::to_string(connections_.size()) + " open)");
   return id;
+}
+
+Result<ConnectionId> ConnectionManager::adopt_backend(SocketHandle socket, ConnectionId client_id) {
+  if (!socket)
+    return Error{ErrorCode::InvalidArgument, "adopt_backend: invalid socket"};
+  if (find(client_id) == nullptr) {
+    return Error{ErrorCode::NotFound, "adopt_backend: unknown client connection"};
+  }
+  // TODO(Member 1): mirror adopt() with ConnectionRole::Backend and initial state
+  // ConnectingBackend; register for Readable | Writable; link peer ids both ways;
+  // ++stats_.total_backend_connects. In on_connection_ready(), a Writable event on a
+  // connection whose state is ConnectingBackend means the async connect finished:
+  // check socket_ops::pending_error(fd) → on 0 transition to ForwardingRequest and call
+  // writable_handler_, otherwise set_last_error() and close(). See docs/ownership.md.
+  return Error::not_implemented("ConnectionManager::adopt_backend");
 }
 
 Connection* ConnectionManager::find(ConnectionId id) noexcept {
@@ -100,11 +115,41 @@ Connection* ConnectionManager::find(ConnectionId id) noexcept {
   return it == connections_.end() ? nullptr : it->second.get();
 }
 
+NetworkStats ConnectionManager::stats() const noexcept {
+  NetworkStats s = stats_;
+  s.open_connections = connections_.size();
+  return s;
+}
+
+Status ConnectionManager::set_interest(Connection& conn, EventMask interest) {
+  if (interest == conn.interest())
+    return ok();
+  if (Status st = loop_.modify(conn.handler_id(), interest); !st)
+    return st;
+  conn.set_interest(interest);
+  return ok();
+}
+
 Status ConnectionManager::request_write(ConnectionId id) {
   Connection* conn = find(id);
   if (conn == nullptr)
     return Error{ErrorCode::NotFound, "request_write: unknown connection"};
-  return loop_.modify(conn->handler_id(), EventMask::Readable | EventMask::Writable);
+  return set_interest(*conn, conn->interest() | EventMask::Writable);
+}
+
+Status ConnectionManager::pause_reads(ConnectionId id) {
+  if (find(id) == nullptr)
+    return Error{ErrorCode::NotFound, "pause_reads: unknown connection"};
+  // TODO(Member 1): set_interest(conn, conn.interest() & ~Readable); conn.set_reads_paused(true).
+  return Error::not_implemented("ConnectionManager::pause_reads");
+}
+
+Status ConnectionManager::resume_reads(ConnectionId id) {
+  if (find(id) == nullptr)
+    return Error{ErrorCode::NotFound, "resume_reads: unknown connection"};
+  // TODO(Member 1): set_interest(conn, conn.interest() | Readable); conn.set_reads_paused(false).
+  // Level-triggered epoll re-reports pending bytes immediately, so no manual re-read.
+  return Error::not_implemented("ConnectionManager::resume_reads");
 }
 
 Status ConnectionManager::close(ConnectionId id) {
@@ -121,10 +166,11 @@ Status ConnectionManager::close(ConnectionId id) {
     (void)conn->state_machine().transition_to(ConnectionState::Closing);
   }
   (void)conn->state_machine().transition_to(ConnectionState::Closed);
+  ++stats_.total_closed;
   log::debug(kLog, "connection " + std::to_string(id) + " closing (" +
                        std::to_string(connections_.size()) + " open)");
   if (close_handler_)
-    close_handler_(id);
+    close_handler_(*conn);
   // Defer destruction: we may be inside this connection's own callback. std::function
   // needs a copyable callable, hence the shared_ptr wrapper around the unique owner.
   loop_.defer(
@@ -138,7 +184,9 @@ void ConnectionManager::on_connection_ready(ConnectionId id, EventMask events) {
     return;  // closed earlier this round; stale event
 
   if (has(events, EventMask::Error)) {
-    log::debug(kLog, "connection " + std::to_string(id) + ": socket error");
+    auto err = socket_ops::pending_error(conn->fd());
+    conn->set_last_error(err ? Error{ErrorCode::SystemError, "socket error", *err} : err.error());
+    log::debug(kLog, "connection " + std::to_string(id) + ": " + conn->last_error()->to_string());
     (void)close(id);
     return;
   }
@@ -147,10 +195,11 @@ void ConnectionManager::on_connection_ready(ConnectionId id, EventMask events) {
     auto n = conn->read_available();
     if (!n) {
       if (n.error().code == ErrorCode::CapacityExceeded) {
-        // TODO(Member 1): hand off to BackpressureController — pause Readable interest
-        // until the upper layer consumes inbound(). For now, close to stay safe.
+        // TODO(Member 1): pause_reads(id) and let the proxy layer drain inbound(); until
+        // the backpressure mechanism exists, close so the proxy cannot buffer unboundedly.
         log::warn(kLog, "connection " + std::to_string(id) + ": inbound buffer full, closing");
       } else if (n.error().code != ErrorCode::ConnectionClosed) {
+        conn->set_last_error(n.error());
         log::debug(kLog, "connection " + std::to_string(id) + ": " + n.error().to_string());
       }
       (void)close(id);
@@ -164,16 +213,24 @@ void ConnectionManager::on_connection_ready(ConnectionId id, EventMask events) {
   }
 
   if (has(events, EventMask::Writable)) {
+    // TODO(Member 1): if conn->state() == ConnectingBackend, resolve the async connect
+    // here (see adopt_backend) instead of flushing.
     auto n = conn->flush();
     if (!n) {
+      conn->set_last_error(n.error());
       (void)close(id);
       return;
     }
     if (!conn->has_pending_output()) {
-      (void)loop_.modify(conn->handler_id(), EventMask::Readable);
+      (void)set_interest(*conn, conn->interest() & ~EventMask::Writable);
       if (conn->state() == ConnectionState::Closing) {
         (void)close(id);
         return;
+      }
+      if (writable_handler_) {
+        writable_handler_(*conn);
+        if (find(id) == nullptr)
+          return;
       }
     }
   }

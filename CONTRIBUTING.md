@@ -5,9 +5,9 @@
 | Branch | Owner | Scope |
 |---|---|---|
 | `main` | Technical Lead merges | always compiles, always green CI |
-| `feature/network-core` | Member 1 | `network/`, build system, CI |
-| `feature/http-proxy` | Member 2 | `http/`, `proxy/` |
-| `feature/load-balancer` | Member 3 | `balancer/`, `datastructures/`, `health/` |
+| `feature/network-core` | Member 1 | `network/`, `main.cpp`, `tests/{unit,integration}/network/`, build system, CI |
+| `feature/http-proxy` | Member 2 | `http/`, `proxy/`, `tests/unit/http/`, `tests/integration/proxy/`, `examples/` |
+| `feature/load-balancer` | Member 3 | `balancer/`, `datastructures/`, `health/`, their `tests/` dirs, `benchmarks/` |
 
 Short-lived topic branches off your feature branch are fine (`feature/http-proxy/chunked`).
 Rebase your feature branch on `main` at least at every integration checkpoint

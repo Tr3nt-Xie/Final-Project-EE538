@@ -34,15 +34,24 @@ All public headers live under `include/aegisproxy/<module>/`. Everything is in n
 | `EventMask`, `PollEvent`, `Poller` | `add/modify/remove/wait` | abstract; `EpollPoller` on Linux |
 | `EventLoop` | `add(fd, mask, cb) → HandlerId`, `modify`, `remove`, `defer`, `run_once`, `run`, `stop` | dispatches by `HandlerId` |
 | `ConnectionState`, `ConnectionStateMachine` | `transition_to`, `is_valid_transition` | rejects invalid transitions |
-| `Connection` | `read_available`, `flush`, `inbound/outbound`, `state_machine`, `set_context` | owned by ConnectionManager |
+| `Connection` | `role`, `peer_id`, `read_available`, `flush`, `inbound/outbound`, `state_machine`, `last_error`, `bytes_read/written`, `set_context` | owned by ConnectionManager |
 | `ConnectionContext` | virtual dtor only | upper-layer per-connection state slot |
-| `ConnectionManager` | `listen`, `adopt`, `find`, `request_write`, `close`, `set_data_handler`, `set_close_handler` | two-phase close |
+| `ConnectionManager` | `listen`, `adopt`, `adopt_backend`*, `find`, `request_write`, `pause_reads`*, `resume_reads`*, `close`, `stats`, `set_data_handler`, `set_writable_handler`, `set_close_handler` | two-phase close; * = TODO(Member 1) |
+| `NetworkStats` | `open_connections`, `total_accepted/rejected/closed`, `total_backend_connects`, `bytes_in/out` | snapshot for Member 3 / benchmarks |
 | `BackpressureController` | `evaluate(queued, paused) → Decision` | TODO |
 
-**Contract with upper layers:** the data handler receives `Connection&` whenever new
-bytes are in `inbound()`. It must `consume()` what it parsed, may append to `outbound()`
-and call `request_write(id)`, and may call `close(id)` — the `Connection&` stays valid
-until the handler returns. It must not keep the reference.
+**Contract with upper layers:** three handlers, each receiving `Connection&` valid only
+until the handler returns (never keep the reference; re-`find(id)` next time):
+
+* *data handler* — new bytes are in `inbound()`; `consume()` what you parsed, append to
+  `outbound()` and call `request_write(id)` if you have something to send.
+* *writable handler* — `outbound()` has drained (write more, or close), **or** a backend
+  connection just finished connecting (state moved `ConnectingBackend → ForwardingRequest`).
+* *close handler* — the connection is about to be destroyed; `last_error()` tells a
+  socket error / refused connect apart from a clean EOF; `role()`/`peer_id()` tell you
+  which side died so you can close or fail over the other.
+
+Any handler may call `close(id)` on any connection, including the one it was called for.
 
 ## http (Member 2)
 
@@ -59,13 +68,15 @@ until the handler returns. It must not keep the reference.
 | Type | Key operations |
 |---|---|
 | `BackendConnector` | `begin_connect(endpoint) → Pending{socket, state}`, `finish_connect(fd)` (implemented) |
-| `RequestForwarder` | `serialize_for_backend`, `forward(client, request, backend_fd)` — **TODO** |
+| `RequestForwarder` | `serialize_for_backend`, `forward(connections, client_id, request, backend_id)` — **TODO** |
 | `HttpProxy` | `attach()`, `on_client_data(Connection&)` — currently answers 501 |
 
 `HttpProxy` is constructed with references to `ConnectionManager`, `BackendRegistry`,
 `LoadBalancingStrategy` and `BackendConnector`; it owns a `RequestForwarder`. Per-connection
 proxy state (`ProxySession`, private to `http_proxy.cpp`) derives from
-`net::ConnectionContext` and is stored on the `Connection`.
+`net::ConnectionContext` and is stored on the client `Connection`. Backend sockets are
+handed to `ConnectionManager::adopt_backend` and addressed by `ConnectionId` from then on;
+`proxy/` never includes `event_loop.hpp` for anything but the type name.
 
 ## datastructures (Member 3, header-only)
 
@@ -112,3 +123,35 @@ observer hooks you need, add a case in `strategy_factory.cpp` and a name in
 
 The monitor has no socket dependency; the probe I/O will be a small helper driven from
 `main` once `EventLoop` has timers.
+
+## Cross-member contracts
+
+### Member 1 ↔ Member 2 (sockets ↔ HTTP)
+
+| Direction | What | How | Errors | Ownership |
+|---|---|---|---|---|
+| 1 → 2 | readiness events | the three `ConnectionManager` handlers above | socket errors arrive as `close` with `last_error()` set | `Connection`, its `Buffer`s and fds belong to `ConnectionManager`; Member 2 holds only `ConnectionId`s |
+| 1 → 2 | connection handles | `ConnectionId`, `find(id)` for the duration of a call | `find` returns `nullptr` after close — always check | — |
+| 1 → 2 | buffer operations | `Buffer::view/readable/consume/append/prepare/commit`, `request_write`, `pause_reads`, `resume_reads` | `CapacityExceeded` from `append/prepare`; `NotFound` for a dead id | — |
+| 2 → 1 | backend socket to supervise | `BackendConnector::begin_connect` → `adopt_backend(socket, client_id)` | `InvalidArgument` (bad socket), `NotFound` (client gone), `SystemError` on connect failure via the close handler | the `SocketHandle` moves into the manager |
+| rule | **Member 2 never calls `EventLoop::add/modify/remove` or touches epoll.** | | | |
+
+### Member 1 ↔ Member 3 (lifecycle ↔ scheduling)
+
+| Direction | What | How | Errors | Ownership |
+|---|---|---|---|---|
+| 1 → 3 | connection lifecycle notifications | `ConnectionManager` close handler (role, peer, `last_error`, byte counts) — consumed by Member 2's proxy, which translates them into `BackendRegistry::on_connection_finished` | — | — |
+| 1 → 3 | networking statistics | `ConnectionManager::stats()` (`NetworkStats`), `Connection::bytes_read/written` | — | snapshot by value |
+| 3 → 1 | nothing direct | strategies and health never see sockets | — | — |
+| rule | **Member 3 never owns client (or backend) socket descriptors.** Backend *endpoints* (host/port) live in the registry; connecting is Member 2's job via Member 1's API. | | | |
+
+### Member 2 ↔ Member 3 (forwarding ↔ balancing)
+
+| Direction | What | How | Errors | Ownership |
+|---|---|---|---|---|
+| 2 → 3 | "pick a backend" | `LoadBalancingStrategy::select(SelectionContext) → Result<BackendId>` | `NoHealthyBackend` → Member 2 answers 503; `NotImplemented` while stubbed | strategy is owned by `main`, passed by reference |
+| 3 → 2 | endpoint for that id | `BackendRegistry::find(id)->endpoint` (`host`, `port`, `name`, `weight`) | `find` returns `nullptr` only for an invalid id | registry entries are immutable except `health`/`stats` |
+| 2 → 3 | request started | `BackendRegistry::on_connection_started(id)` right after `adopt_backend` succeeds | `NotFound` | — |
+| 2 → 3 | request finished / failed + latency | `BackendRegistry::on_connection_finished(id, CompletionInfo{latency, success})` exactly once per `on_connection_started` (also on connect failure with `success=false`) | `InvalidState` if unbalanced — treat as a bug | — |
+| 3 → 2 | health changes | none directly: strategies react internally; Member 2 just calls `select()` again | — | — |
+| joint | failover policy | Member 2 retries `select()` + connect up to *N* times (skipping the failed id via `SelectionContext`, to be added), then 502; Member 3's health monitor marks the backend Unhealthy after `unhealthy_threshold` probe failures | agree *N* and the skip mechanism at Checkpoint A | — |
