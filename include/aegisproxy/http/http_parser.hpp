@@ -42,6 +42,7 @@ class HttpParser {
   static constexpr std::size_t kMaxRequestLineBytes = 8 * 1024;
   static constexpr std::size_t kMaxHeaderBytes = 64 * 1024;
   static constexpr std::size_t kMaxHeaderCount = 100;
+  static constexpr std::size_t kMaxBodyBytes = std::size_t{10} * 1024 * 1024;
 
   HttpParser() = default;
 
@@ -59,12 +60,23 @@ class HttpParser {
   void reset() noexcept;
 
  private:
-  // TODO(Member 2): private helpers — parse_request_line(), parse_header_line(),
-  // parse_body_fixed(), parse_body_chunked().
+  enum class StepOutcome : std::uint8_t { NeedMore, Continue, Complete };
+
+  Result<StepOutcome> step_request_line(std::string_view input, std::size_t& consumed);
+  Result<StepOutcome> step_headers(std::string_view input, std::size_t& consumed);
+  Result<StepOutcome> step_body(std::string_view input, std::size_t& consumed);
+  Result<StepOutcome> parse_body_fixed(std::string_view input, std::size_t& consumed);
+  Status parse_request_line(std::string_view line);
+  Status parse_header_line(std::string_view line);
+  Status finish_headers();
+  Error fail(std::string message);
+
+  // TODO(Member 2): parse_body_chunked() (Week 4).
   State state_{State::RequestLine};
   HttpRequest request_;
   std::uint64_t body_remaining_{0};
   std::size_t header_bytes_{0};
+  bool chunked_{false};
 };
 
 [[nodiscard]] std::string_view to_string(HttpParser::State state) noexcept;
